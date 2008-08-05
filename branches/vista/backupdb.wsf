@@ -1,31 +1,30 @@
 ' Copyright (c) 2008, Symantec Corporation
 ' All rights reserved.
 ' 
-' Redistribution and use in source and binary forms, with or without
-' modification, are permitted provided that the following conditions are met:
+' Redistribution and use in source and binary forms, with or without modification,
+' are permitted provided that the following conditions are met:
 '
 ' * Redistributions of source code must retain the above copyright notice,
 '   this list of conditions and the following disclaimer.
 ' * Redistributions in binary form must reproduce the above copyright notice,
 '   this list of conditions and the following disclaimer in the documentation
 '   and/or other materials provided with the distribution.
-' * Neither the name of the Symantec Corporation nor the names of its
-'   contributors may be used to endorse or promote products derived from this
-'   software without specific prior written permission.
+' * Neither the name of the Symantec Corporation nor the names of its contributors
+'   may be used to endorse or promote products derived from this software without
+'   specific prior written permission.
 '
-' THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-' IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-' ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-' LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-' CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-' SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-' INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-' CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+' THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+' ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+' WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+' IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+' INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+' NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+' PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+' WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ' ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 ' POSSIBILITY OF SUCH DAMAGE.
 '
-'----------------------------------------------------------------------------
+'-----------------------------------------------------------------------------------
 '
 ' Create a single Cabinet-format archive with the GSS server database and all
 ' the associated bits and bobs such as the access passwords for the database
@@ -367,19 +366,29 @@
 
     keepFiles outputPath, keepCount
 
-    set shortcut = Shell.CreateShortcut (outputPath & "\" & shortcutName & ".lnk")
+    dim path
+    path = outputPath & "\" & shortcutName & ".lnk"
+
+    dim shortcut
+    set shortcut = Shell.CreateShortcut (path)
     shortcut.Description = "Most recent GSS backup cabinet"
     shortcut.TargetPath = outputPath & "\" & cabName
     shortcut.IconLocation = consoleExe & ",0"
     shortcut.Save
-    
+
+    makeRequireAdmin (path)
+
     if FS.FileExists (restoreScript) then
-      set shortcut = Shell.CreateShortcut (outputPath & "\" & restoreName & ".lnk")
+      path = outputPath & "\" & restoreName & ".lnk"
+
+      set shortcut = Shell.CreateShortcut (path)
       shortcut.TargetPath = restoreScript
       shortcut.Description = "Restore most recent GSS backup"
       shortcut.Arguments = q & outputPath & "\" & cabName & q
       shortcut.IconLocation = serverExe & ",0"
       shortcut.Save
+      
+      makeRequireAdmin (path)
     end if
   end if
 
@@ -395,10 +404,17 @@
 ' it's just portable enough for our needs.
 
 function exportHklm (path, deleteFlag)
+  dim reg
   set reg = GetObject ("winmgmts:\\.\root\default:StdRegProv")
 
   HKLM = &H80000002
+
+  dim result
+  dim types
   result = reg.EnumValues (HKLM, path, names, types)
+
+  dim result2
+  dim keys
   result2 = reg.EnumKey (HKLM, path, keys)
 
   if result <> 0 and result2 <> 0 then
@@ -406,11 +422,16 @@ function exportHklm (path, deleteFlag)
     exit function
   end if
 
+  dim q
   q = Chr (34)
+  
+  dim crlf
   crlf = Chr (13) & Chr (10)
 
+  dim str
   str = crlf & "[HKEY_LOCAL_MACHINE\" & path & "]" & crlf
 
+  dim value
   if result = 0 and IsArray (names) then
     for i = lbound (names) to ubound (names)
       ' type 1 is REG_SZ, type 3 is REG_BINARY, type 4 is DWORD
@@ -439,6 +460,8 @@ function exportHklm (path, deleteFlag)
         result = reg.GetBinaryValue (HKLM, path, names (i), value)
         if result = 0 then
           str = str & q & names (i) & q & "=hex:"
+
+          dim j
           for j = lbound (value) to ubound (value)
             if j > lbound (value) then
               str = str & ","
@@ -459,6 +482,7 @@ function exportHklm (path, deleteFlag)
   end if
 
   if result2 = 0 and IsArray (keys) then
+    dim key
     for each key in keys
       str = str & exportHklm (path & "\" & key)
     next
@@ -477,7 +501,9 @@ end function
 ' registry types we support).
 
 function writeReg (FS, path, str)
+  dim out
   set out = FS.CreateTextFile (path, true, true)
+
   out.WriteLine "Windows Registry Editor Version 5.00"
   out.WriteLine str
 end function
@@ -490,7 +516,10 @@ end function
 
 sub keepFiles (folderName, count)
   ' Make the recordset with two columns, ,and copy the file information into it
+  dim folder
   set folder = FS.GetFolder (folderName)
+
+  dim rs
   set rs = CreateObject ("ADODB.RecordSet")
 
   ' Using 256 for the "name" field length makes it variable-length instead of
@@ -535,13 +564,17 @@ function defaultOutputPath (baseName)
   ' world-readable. I'll use a directory under the administrator's "My
   ' Documents" folder.
 
+  dim xShell
   set xShell = CreateObject("Shell.Application")
+  
+  dim myDocsFolder
   set myDocsFolder = xShell.namespace (&H5&)
 
   ' Windows 2000 Shell.Namespace doesn't support NewFolder out of the My
   ' Documents object so we always use the more complicated method of resolving
   ' through Self.Path
 
+  dim path
   path = myDocsFolder.Self.Path & "\" & baseName
   if not FS.FolderExists (path) then
     FS.CreateFolder (path)
@@ -555,6 +588,7 @@ end function
 ' regular arguments collection into pieces
 
 function namedArguments ()
+  dim named
   set named = CreateObject ("Scripting.Dictionary")
 
   for each arg in WScript.Arguments
@@ -574,8 +608,10 @@ end function
 ' Similar to the above, get the set of unnamed arguments for WScript 5.1
 
 function unnamedArguments ()
+  dim count
   count = 0
 
+  dim arg
   for each arg in WScript.Arguments
     if Mid (arg, 1, 1) <> "/" then
       count = count + 1
