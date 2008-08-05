@@ -640,5 +640,60 @@ function strEq (left, right)
   strEq = StrComp (left, right, 1) = 0
 end function
 
+' Detect Vista (Windows 6 or later).
+
+function isVista
+  dim wmi
+  set wmi = GetObject ("winmgmts:{impersonationLevel=impersonate}!\\.\root\cimv2")
+
+  dim oses
+  set oses = wmi.execQuery ("select * from Win32_OperatingSystem")
+
+  isVista = false
+  dim os
+  for each os in oses
+    if os.BuildNumber >= 6000 then
+      isVista = true
+    end if
+  next
+end function
+
+' Modify a .LNK file to set the "run as Administrator" bit to on, which
+' can't be done through the documented scripting interfaces. This should
+' only be done for shortcuts that directly reference an .EXE target, since
+' the bit we modify only has meaning for that case.
+'
+' Prior to Windows Vista the flag means something else, so we should only
+' set this flag if we detect Vista
+
+sub makeRequireAdmin (path)
+  if not isVista () then
+    exit sub
+  end if
+
+  dim edit
+  set edit = WScript.CreateObject ("ADODB.Stream")
+  edit.Open
+  edit.Type = 1          ' set binary mode
+  edit.LoadFromFile path
+  edit.Position = 21
+
+  dim data
+  data = edit.Read (1)
+
+  data = ChrB (AscB (data) Or &H20)
+
+  edit.Position = 0
+  edit.Type = 2
+  
+  edit.Position = 21
+  edit.WriteText data
+
+  edit.Position = 0
+  edit.Type = 1         ' back to binary
+
+  edit.SaveToFile path, 2
+end sub
+
 </script>
 </job>
