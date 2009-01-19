@@ -62,8 +62,10 @@ function urlEscape (str) {
   arch = Env ("PROCESSOR_ARCHITECTURE")
 
   if arch <> "x86" then
-    host = Replace (LCase (WScript.FullName), "system32", "SysWow64")
-
+    host = Replace (WScript.FullName, "System32", "SysWow64", 1, -1, 1)
+    if host = WScript.FullName then
+      WScript.Quit 1
+    end if
 
     args = q & WScript.ScriptFullName & q
     for each arg in WScript.Arguments
@@ -223,6 +225,7 @@ function MAClist (value)
   ' Loop over individual MAC addresses, each of which starts with the fixed
   ' two-byte tag below
 
+  dim str
   str = ""
 
   do while LenB (value) > 0
@@ -231,6 +234,8 @@ function MAClist (value)
     end if
 
     value = MidB (value, 3)
+
+    dim i
     for i = 1 to 6
       if i > 1 then
         str = str & "-"
@@ -254,13 +259,16 @@ end function
 ' joins in subqueries can be too much for the provider.
 
 function cleanMachineViews (adoConnection)
+  dim query
   query = "select Machine.ID as x " & _
           "from Machine left join MachineView " & _
           "on machine.id = machineView.machineId " & _
           "where machineView.machineId is NULL"
 
+  dim rs
   set rs = adoConnection.execute (query, rows, 1)
 
+  dim cmd
   set cmd = CreateObject ("ADODB.Command")
   cmd.ActiveConnection = adoConnection
   cmd.CommandText = "delete from Machine where Id = ?"
@@ -290,13 +298,17 @@ sub loadMachineViews (adoRecord)
   ' collections - we want to map client IDs to view IDs, view IDs to names,
   ' and view IDs to their parents (where they exist).
 
+  dim query
   query = "select ID, Description, MachineID, ParentID " & _
           "from MachineView order by ID desc"
 
   adoRecord.Open (query)
 
   do while not adoRecord.EOF
+    dim machineId
     machineId = adoRecord ("MachineID")
+
+    dim id
     id = adoRecord ("ID")
 
     if IsEmpty (names) or id > maxView then
@@ -325,6 +337,7 @@ end sub
 ' Use the machines, names, and parents arrays to builds a pathname right-to-left
 
 function getPath (id, escape)
+  dim viewId
   viewId = machines (id)
 
   if viewId = "" then
@@ -332,6 +345,7 @@ function getPath (id, escape)
     exit function
   end if
 
+  dim str
   str = names (viewId)
   if escape then
     str = urlEscape (str)
@@ -339,6 +353,8 @@ function getPath (id, escape)
 
   do while Not IsNull (parents (viewId))
     viewId = parents (viewId)
+
+    dim parent
     parent = names (viewId)
     if escape then
       parent = urlEscape (parent)

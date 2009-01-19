@@ -161,30 +161,8 @@
   pass = dbinfo.Password
 
   '---------------------------------------------------------------------------
-  ' Before we do anything, take an emergency undo backup of the current state.
-
-  backupScript = Replace (WScript.ScriptFullName, "delclients", "backupdb")
-
-  if FS.FileExists (backupScript) then
-    result = Shell.Run (q & backupScript & q & " /undo:ClientDelete", 2, true) 
-
-    if result <> 0 then
-      result = MsgBox ("Could not create undo cabinet, proceed with client delete?", 1)
-      if result <> 1 then
-        WScript.Quit 1
-      end if
-    end if
-
-  elseif not quiet then
-    ' If we don't have the backup script sitting next to us, nag
-
-    result = MsgBox ("Cannot find the backup script to create an undo file; " & lf & lf & _
-		     "Are you sure you want to proceed?", 1)
-
-    if result <> 1 then
-      WScript.Quit 1
-    end if
-  end if
+  ' This script doesn't take an emergency backup, since we're only deleting
+  ' empty folders.
 
   ' Form the ODBC connection string to the database - this is a 32-bit connection
   ' string, not usable on 64-bit systems (which also don't have the requisite ADODB
@@ -198,36 +176,28 @@
   adoConn.Open (conn)
   adoConn.BeginTrans
 
-  ' Begin by matching the machine names and getting the machine unique
-  ' database ID codes, from which we derive all the other stages in the
-  ' pipeline.
+  ' Begin by matching the folder names and getting their database ID codes,
+  ' before doing the delete steps that relate to non-Machine objects. We
+  ' only work with empty folders for now, so as not to have to worry about
+  ' cascading deletes of inner folders and machines
 
-  set machines = filterMachines (find)
-  if machines.Count = 0 then
-    WScript.Echo "No matches found"
+  set shortcuts = filterFolders (find)
+  if shortcuts.Count = 0 then
+    WScript.Echo "No matching empty folders found"
     WScript.Quit 1
   end if
 
-  ' Second stage is to expand that into the set of all the shortcuts
-  ' that match the machine IDs, since many of the things that link to
-  ' machines do so by their shortcut ID instead of the machine ID.
-
-  set shortcuts = findShortcuts (machines)
-  set configs = findConfigs (machines)
+  ' Now clean up all the things that refer to those shortcuts
 
   shortcutSet = keysToSet (shortcuts)
-  machineSet = keysToSet (machines)
-  configSet = keysToSet (configs)
 
-  x = clean_WMIReport (shortcutSet) + _
-      clean_Inventory (machineSet) + _
-      clean_Backups (machineSet) + _
+  x = clean_decommission () + _
+      clean_WMIReport (shortcutSet) + _
       clean_CustomConfigs (shortcutSet) + _
-      clean_Configs (configSet) + _
       clean_Tasks (shortcutSet) + _
-      clean_Machines (machineSet)
+      clean_Folders (shortcutSet)
 
-  WScript.Echo machines.Count & " client(s) with " & x & " database records cleaned"
+  WScript.Echo shortcuts.Count & " empty folder(s) with " & x & " database records cleaned"
 
   ' Notify the configuration Server of the changes that we've made, which
   ' it handles by re-reading everything.
@@ -322,7 +292,6 @@ function valuesToSet(dict)
     else
       str = str & ","
     end if
-
     str = str & dict (id)
   next
 
@@ -353,11 +322,16 @@ function execSql (sql)
   execSql = rows
 end function
 
-' Build a list of Machine.ID values by looking through all the MachineView
-' shortcut names and matching them. This only looks for machines, not
-' folders, since folders have no MachineID column.
+' Build a list of MachineView.ID values for empty folders that match the
+' given name.
+'
+' To get the set of empty folders, self-join the table to itself looking
+' for rows that aren't referenced as the "ParentID" of anything else.
+' (RootIDs don't really matter, they are largely the result of design
+' strangeness in the console UI, so that a shortcut to a machine cannot
+' appear more than once underneath a root-level folder).
 
-function filterMachines (pattern)
+function filterFolders (pattern)
   ' Create the RegExp object to do the matching
 
   dim re
@@ -373,12 +347,16 @@ function filterMachines (pattern)
   ' Look in all the returned rows for the pattern the user asked for
 
   dim record
-  set record = query ("select Description, MachineId " & _
-                      "from Machine, MachineView " & _
-                      "where Machine.ID = MachineView.MachineID")
+  set record = query ("select l.Description, l.ID " & _
+                      "from MachineView as l left join MachineView as r on l.id = r.ParentID " & _
+                      "where r.id is null and l.machineId is null and l.ID > 1")
+
   do while not record.EOF
+    dim desc
     desc = record ("Description")
-    id = record ("MachineId")
+
+    dim id
+    id = record ("ID")
 
     if re.Test (desc) then
       ' We got a hit; record the ID in a dictionary object
@@ -397,71 +375,38 @@ function filterMachines (pattern)
 
   record.Close
   
-  set filterMachines = dict
+  set filterFolders = dict
 end function
 
 
-' Take a dictionary of machine IDs and generate a dictionary of machine
-' shortcut (aka view) IDs
+' In addition to the main cleanup tasks, there is a special one we do.
+' The GSS2.5 console has a design fault where "Machine Decommission" tasks
+' are created as temporary "template" tasks, but for some inexplicable
+' reason are not displayed (they are filtered out of the "Executed template
+' tasks" pseudofolder.
+'
+' This can leave behind immortal and invisible task records that prevent
+' folders from being deleted. This is an attempt to at least vaguely clean
+' up the damage caused by this.
 
-function findShortcuts (machines)
-  dim dict
-  set dict = CreateObject ("Scripting.Dictionary")
+function clean_decommission
+  dim x1
+  x1 = execSql ("delete From MachineDecommission")
 
-  dim x
-  x = keysToSet (machines)
+  dim x2
+  x2 = execSql ("delete from TaskView from Task " & _
+                "where TaskView.TaskID = Task.ID and Task.Steps = 16384")
 
-  dim record
-  set record = query ("select ID, MachineId from MachineView " & _
-                      "where MachineId IN " & x)
-  do while not record.EOF
-    dim id
-    id = record ("ID")
+  dim x3
+  x3 = execSql ("delete from TaskOp from Task " & _
+                "where TaskOP.TaskID = Task.ID and Task.Steps = 16384")
 
-    dim machineId
-    machineId = record ("MachineId")
+  dim y
+  y = execSql ("delete from Task " & _
+               "where Task.Steps = 16384")
 
-    dict.Add id, machineId
-    record.MoveNext
-  loop
-
-  record.Close
-
-  set findShortcuts = dict
+  clean_decommission = x1 + x2 + x3 + y
 end function
-
-' Takes a dictionary of machine IDs and generate a dictionary of
-' config IDs
-
-function findConfigs (machines)
-  dim dict
-  set dict = CreateObject ("Scripting.Dictionary")
-
-  dim x
-  x = keysToSet (machines)
-
-  dim record
-  set record = query ("select ID, MachineId from ResourceView " & _
-                      "where MachineId IN " & x)
-  do while not record.EOF
-    dim id
-    id = record ("ID")
-
-    dim machineId
-    machineId = record ("MachineId")
-
-    dict.Add id, machineId
-    record.MoveNext
-  loop
-
-  record.Close
-
-  set findConfigs = dict
-end function
-
-'--------------------------------------------------------------------
-' The various cleanup functions to purge the client data.
-
 
 '--------------------------------------------------------------------
 ' The various cleanup functions to purge the client data.
@@ -542,16 +487,12 @@ function clean_Tasks (shortcuts)
   clean_Tasks = x + y
 end function
 
-function clean_Machines (machines)
+function clean_Folders (shortcuts)
   dim x
   x = execSql ("delete from MachineView " & _
-               "where MachineId IN " & machines)
+               "where ID IN  " & shortcuts)
 
-  dim y
-  y = execSql ("delete from Machine " & _
-               "where ID IN " & machines)
-
-  clean_Machines = x + y
+  clean_Folders = x
 end function
 
 </script>
