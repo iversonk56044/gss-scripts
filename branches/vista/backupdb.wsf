@@ -179,8 +179,39 @@
     software = software & wow64
     ghostPath = Shell.RegRead (software & "Symantec\InstalledApps\Ghost")
   end if
+
+  if ghostPath = "" then
+    WScript.Echo "A GSS server was not found on this machine"
+    WScript.Quit 1
+  end if
+
+  ' Vista elevation check: can we access privkey.crt? If it exists but we can't
+  ' open it, then re-launch ourselves. This file is maintained with a special
+  ' ACL which is why this test works.
+
+  crt = ghostPath & "\privkey.crt"
+  if FS.FileExists (crt) then
+    dim reader
+
+    on error resume next
+    set reader = FS.OpenTextFile (crt, 1)
+    on error goto 0
+
+    if not IsObject (reader) then
+      if isVista then
+        relaunchElevated
+      else
+        WScript.Echo "Cannot run this script as a non-administrator"
+      end if
+      WScript.Quit 1
+    end if
+
+    set reader = nothing
+  end if
+
   serverExe = ghostPath & "\ngserver.exe"
   consoleExe = ghostPath & "\ngcons.exe"
+
 
   dbeng = Shell.RegRead (software & "Symantec\Symantec Ghost\InstallDirectory\dbeng")
   backupExe = q & dbeng & "\dbbackup" & q
@@ -381,10 +412,13 @@
     if FS.FileExists (restoreScript) then
       path = outputPath & "\" & restoreName & ".lnk"
 
+      ' This target needs to reference the script engine (be an EXE)
+      ' so we can request elevation.
+
       set shortcut = Shell.CreateShortcut (path)
-      shortcut.TargetPath = restoreScript
+      shortcut.TargetPath = WScript.FullName
       shortcut.Description = "Restore most recent GSS backup"
-      shortcut.Arguments = q & outputPath & "\" & cabName & q
+      shortcut.Arguments = q & restoreScript & q & " " & q & outputPath & "\" & cabName & q
       shortcut.IconLocation = serverExe & ",0"
       shortcut.Save
       
@@ -693,6 +727,22 @@ sub makeRequireAdmin (path)
   edit.Type = 1         ' back to binary
 
   edit.SaveToFile path, 2
+end sub
+
+' Re-launch the script interpreter using the 'runas' verb to the
+' Shell.Application object's ShellExecute method
+
+sub relaunchElevated
+  dim args
+  args = q & WScript.ScriptFullName & q
+
+  for each arg in WScript.Arguments
+    args = args & " " & q & arg & q
+  next
+
+  dim app
+  set app = WScript.CreateObject ("Shell.Application")
+  app.ShellExecute WScript.FullName, args, , "runas", 1
 end sub
 
 </script>
