@@ -215,19 +215,39 @@
   set shortcuts = findShortcuts (machines)
   set configs = findConfigs (machines)
 
-  shortcutSet = keysToSet (shortcuts)
-  machineSet = keysToSet (machines)
-  configSet = keysToSet (configs)
+  dim machineCount
+  machineCount = machines.count
 
-  x = clean_WMIReport (shortcutSet) + _
-      clean_Inventory (machineSet) + _
-      clean_Backups (machineSet) + _
-      clean_CustomConfigs (shortcutSet) + _
-      clean_Configs (configSet) + _
-      clean_Tasks (shortcutSet) + _
-      clean_Machines (machineSet)
+  dim x
+  x = 0
 
-  WScript.Echo machines.Count & " client(s) with " & x & " database records cleaned"
+  dim limit
+  limit = 32
+
+  dim what
+  do while shortcuts.count > 0
+    what = keysToSet (shortcuts, limit)
+
+    x = x + clean_WMIReport (what) + _
+      	    clean_CustomConfigs (what) + _
+            clean_Tasks (what)
+  loop
+
+  do while configs.count > 0
+    what = keysToSet (configs, limit)
+
+    x = x + clean_Configs (what)
+  loop
+
+  do while machines.count > 0
+    what = keysToSet (machines, limit)
+
+    x = x + clean_Inventory (what) + _
+            clean_Backups (what) + _
+            clean_Machines (what)
+  loop
+
+  WScript.Echo machineCount & " client(s) with " & x & " database records cleaned"
 
   ' Notify the configuration Server of the changes that we've made, which
   ' it handles by re-reading everything.
@@ -286,53 +306,28 @@ end function
 ' Extract a string from the dictionary which combines the strings into a
 ' set literal suitable for using with the IN operator.
 
-function keysToSet(dict)
+function keysToSet (dict, limit)
   dim str
-  str = ""
+  str = "("
 
+  dim id
   for each id in dict.keys
-    if str = "" then
-      str = "("
-    else
+    if str <> "(" then
       str = str & ","
     end if
 
     str = str & id
+    dict.remove (id)
+
+    if limit = 1 then
+      exit for
+    end if
+    limit = limit - 1
   next
 
-  if str = "" then
-    str = "()"
-  else
-    str = str & ")"
-  end if
+  str = str & ")"
 
   keysToSet = str
-end function
-
-' Extract a string from the dictionary which combines the value strings
-' into a set literal suitable for using with the IN operator.
-
-function valuesToSet(dict)
-  dim str
-  str = ""
-
-  for each id in dict.keys
-    if str = "" then
-      str = "("
-    else
-      str = str & ","
-    end if
-
-    str = str & dict (id)
-  next
-
-  if str = "" then
-    str = "()"
-  else
-    str = str & ")"
-  end if
-
-  valuesToSet = str
 end function
 
 ' Create a query object
@@ -408,24 +403,22 @@ function findShortcuts (machines)
   dim dict
   set dict = CreateObject ("Scripting.Dictionary")
 
-  dim x
-  x = keysToSet (machines)
+  dim machineId
+  for each machineId in machines.keys
+    dim record
+    set record = query ("select ID from MachineView " & _
+                        "where MachineId = " & machineId)
 
-  dim record
-  set record = query ("select ID, MachineId from MachineView " & _
-                      "where MachineId IN " & x)
-  do while not record.EOF
-    dim id
-    id = record ("ID")
+    do while not record.EOF
+      dim id
+      id = record ("ID")
 
-    dim machineId
-    machineId = record ("MachineId")
+      dict.Add id, machineId
+      record.MoveNext
+    loop
 
-    dict.Add id, machineId
-    record.MoveNext
-  loop
-
-  record.Close
+    record.Close
+  next 
 
   set findShortcuts = dict
 end function
@@ -437,24 +430,22 @@ function findConfigs (machines)
   dim dict
   set dict = CreateObject ("Scripting.Dictionary")
 
-  dim x
-  x = keysToSet (machines)
+  dim machineId
+  for each machineId in machines.keys
+    dim record
+    set record = query ("select ID from ResourceView " & _
+                        "where MachineId = " & machineId)
 
-  dim record
-  set record = query ("select ID, MachineId from ResourceView " & _
-                      "where MachineId IN " & x)
-  do while not record.EOF
-    dim id
-    id = record ("ID")
+    do while not record.EOF
+      dim id
+      id = record ("ID")
 
-    dim machineId
-    machineId = record ("MachineId")
+      dict.Add id, machineId
+      record.MoveNext
+    loop
 
-    dict.Add id, machineId
-    record.MoveNext
-  loop
-
-  record.Close
+    record.Close
+  next
 
   set findConfigs = dict
 end function
@@ -517,6 +508,11 @@ function clean_CustomConfigs (shortcuts)
 end function
 
 function clean_Configs (configs)
+  if configs = "()" then
+    clean_Configs = 0
+    exit function
+  end if
+
   dim x
   x = execSql ("delete from ConfParam " & _
                "where ConfigurationId IN " & configs)
@@ -524,7 +520,7 @@ function clean_Configs (configs)
   dim y
   y = execSql ("delete from Configuration " & _
                "where ID IN " & configs)
-               
+
   clean_Configs = x + y
 end function
 
@@ -556,4 +552,3 @@ end function
 
 </script>
 </job>
-
