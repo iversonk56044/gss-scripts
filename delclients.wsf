@@ -146,6 +146,7 @@
   end if
 
   quiet = switches.Exists ("quiet")
+  nobackup = switches.Exists ("nobackup")
 
   ' Access the Configuration Server service's root COM scripting object
 
@@ -165,7 +166,9 @@
 
   backupScript = Replace (WScript.ScriptFullName, "delclients", "backupdb")
 
-  if FS.FileExists (backupScript) then
+  if nobackup then
+    ' nothing to do except proceed on
+  elseif FS.FileExists (backupScript) then
     result = Shell.Run (q & backupScript & q & " /undo:ClientDelete", 2, true) 
 
     if result <> 0 then
@@ -222,7 +225,7 @@
   x = 0
 
   dim limit
-  limit = 32
+  limit = 128
 
   dim what
   do while shortcuts.count > 0
@@ -239,21 +242,30 @@
     x = x + clean_Configs (what)
   loop
 
+  ' The WMI data is a special case since it can have 10,000+ records
+  ' per machine; handle it one machine at a time to avoid internal
+  ' limits in ADO that blow out
+
+  dim item
+  for each item in machines.keys
+    x = x + clean_Inventory (item)
+  next
+
   do while machines.count > 0
     what = keysToSet (machines, limit)
 
-    x = x + clean_Inventory (what) + _
-            clean_Backups (what) + _
+    x = x + clean_Backups (what) + _
             clean_Machines (what)
   loop
+
+  adoConn.commitTrans
+  server.RefreshDatabase
 
   WScript.Echo machineCount & " client(s) with " & x & " database records cleaned"
 
   ' Notify the configuration Server of the changes that we've made, which
   ' it handles by re-reading everything.
 
-  adoConn.CommitTrans
-  server.RefreshDatabase
   WScript.Quit 0
 
 ' Since WScript 5.1 doesn't support the Named argument collection, split the regular
@@ -306,7 +318,7 @@ end function
 ' Extract a string from the dictionary which combines the strings into a
 ' set literal suitable for using with the IN operator.
 
-function keysToSet (dict, limit)
+function keysToSet (dict, byval limit)
   dim str
   str = "("
 
@@ -453,10 +465,6 @@ end function
 '--------------------------------------------------------------------
 ' The various cleanup functions to purge the client data.
 
-
-'--------------------------------------------------------------------
-' The various cleanup functions to purge the client data.
-
 function clean_WMIReport (shortcuts)
   dim x
   x = execSql ("delete from WMIReport " & _
@@ -486,14 +494,14 @@ function clean_Backups (machines)
   clean_Backups = x
 end function
 
-function clean_Inventory (machines)
+function clean_Inventory (id)
   dim x
   x = execSql ("delete from WMIData " & _
-               "where MachineId IN " & machines)
+               "where MachineId = " & id)
 
   dim y
   y = execSql ("delete from MachineWMIViewMap " & _
-               "where MachineId IN " & machines)
+               "where MachineId = " & id)
 
   clean_Inventory = x + y
 end function
