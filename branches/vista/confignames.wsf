@@ -73,9 +73,15 @@
     unnamedCount = unnamed.Count
   end if
 
+  ' Have a "test" mode for forcing the configuration names to a fixed
+  ' value - for testing the code changes in post-GSS2.5 designed to
+  ' avoid the root problem this script addresses.
+
+  test = switches.Exists ("test")
+
   ' Access the Configuration Server service's root COM scripting object
 
-  set server = CreateObject("ConfigServer.Application")
+  set server = CreateObject ("ConfigServer.Application")
 
   ' Get the database configuration object from the configuration server
 
@@ -98,6 +104,13 @@
   adoConn.Open (conn)
   adoConn.BeginTrans
 
+  if test then
+    execSql ("update ResourceView set Description = 'test' " & _
+             "where ParentId = 2 AND MachineId IS NOT NULL")
+    adoConn.CommitTrans
+    WScript.Quit 0
+  end if
+
   ' Get the machine names for machines with default configurations
 
   dim id_name
@@ -114,22 +127,25 @@
   dim collision
   collision = false
 
-  do while not record.EOF
-    dim id
-    id = record ("ID")
+  dim name
+  dim id
 
-    dim name
+  do while not record.EOF
+    id = record ("ID")
     name = record ("Description")
 
     if name_id.Exists (name) then
       ' There's a collision, make up a name
       name = name & " - " & id
       collision = true
+
+      ' the id_name map is what we process when changing things,
+      ' so only add things to it if they need to be altered.
+
+      id_name.Add id, name
     end if
 
     name_id.Add name, id
-    id_name.Add id, name
-
     record.MoveNext
   loop
 
@@ -150,7 +166,7 @@
   adoConn.commitTrans
   server.RefreshDatabase
 
-  WScript.Echo "Configuration names updated"
+  WScript.Echo id_name.count & " configuration names updated"
 
   ' it handles by re-reading everything.
 
