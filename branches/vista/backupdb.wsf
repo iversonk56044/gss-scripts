@@ -239,16 +239,29 @@
     FS.CreateFolder workingPath
   end if
 
+  ' Determine whether the server executable supports credential export - GSS 1.1 has
+  ' it, GSS 1.0 (aka Ghost 8.2 and earlier) does not.
+
+  dim exports
+  exports = CDbl (Left (FS.GetFileVersion (serverExe), 3)) >= 8.3
+
   ' Ask the Configuration Server to export the stored credentials to the registry.
 
-  window = 2
-  result = Shell.Run (q & serverExe & q & " -export", window, true)
+  if exports then
+    window = 2
+    result = Shell.Run (q & serverExe & q & " -export", window, true)
 
-  ' Read the DBA-level username and password out from the registry (later on we'll
-  ' export these to a file and scrub them).
+    ' Read the DBA-level username and password out from the registry (later on we'll
+    ' export these to a file and scrub them).
 
-  user = Shell.RegRead (software & "Symantec\Symantec Ghost\NGServer\DBA")
-  pass = Shell.RegRead (software & "Symantec\Symantec Ghost\NGServer\DBP")
+    user = Shell.RegRead (software & "Symantec\Symantec Ghost\NGServer\DBA")
+    pass = Shell.RegRead (software & "Symantec\Symantec Ghost\NGServer\DBP")
+  else
+    ' For GSS 1.0 and earlier, use the embedded default credentials.
+
+    user = "dba"
+    pass = "sql"
+  end if
 
   ' Get the NGServer file version, so we can write that to a file we can include in
   ' the cabinet; this will allow restore scripts to check that the database can in
