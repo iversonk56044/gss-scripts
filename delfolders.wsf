@@ -86,16 +86,24 @@
 
   ' Access the Configuration Server service's root COM scripting object
 
-  set server = CreateObject("ConfigServer.Application")
+  set server = CreateObject ("ConfigServer.Application")
 
   ' Get the database configuration object from the configuration server
 
+  dim dbInfo
+  on error resume next
   set dbInfo = server.ConfigDatabase
+  on error goto 0
 
   ' Obtain the current database username and password
 
-  user = dbInfo.Username
-  pass = dbinfo.Password
+  if not IsEmpty (dbInfo) then
+    user = dbInfo.Username
+    pass = dbinfo.Password
+  else
+    user = "dba"
+    pass = "sql"
+  end if
 
   '---------------------------------------------------------------------------
   ' This script doesn't take an emergency backup, since we're only deleting

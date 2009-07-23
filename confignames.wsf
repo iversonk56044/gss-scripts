@@ -85,12 +85,20 @@
 
   ' Get the database configuration object from the configuration server
 
+  dim dbInfo
+  on error resume next
   set dbInfo = server.ConfigDatabase
+  on error goto 0
 
   ' Obtain the current database username and password
 
-  user = dbInfo.Username
-  pass = dbinfo.Password
+  if not IsEmpty (dbInfo) then
+    user = dbInfo.Username
+    pass = dbinfo.Password
+  else
+    user = "dba"
+    pass = "sql"
+  end if
 
   ' Form the ODBC connection string to the database - this is a 32-bit connection
   ' string, not usable on 64-bit systems (which also don't have the requisite ADODB
