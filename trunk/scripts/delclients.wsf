@@ -103,7 +103,11 @@
   arch = Env ("PROCESSOR_ARCHITECTURE")
 
   if arch <> "x86" then
-    host = Replace (WScript.FullName, "System32", "SysWow64")
+    host = Replace (WScript.FullName, "System32", "SysWow64", 1, -1, 1)
+    if host = WScript.FullName then
+      WScript.Quit 1
+    end if
+
     args = q & WScript.ScriptFullName & q
     for each arg in WScript.Arguments
       args = args & " " & q & arg & q
@@ -143,26 +147,37 @@
   end if
 
   quiet = switches.Exists ("quiet")
+  nobackup = switches.Exists ("nobackup")
 
   ' Access the Configuration Server service's root COM scripting object
 
-  set server = CreateObject("ConfigServer.Application")
+  set server = CreateObject ("ConfigServer.Application")
 
   ' Get the database configuration object from the configuration server
 
+  dim dbInfo
+  on error resume next
   set dbInfo = server.ConfigDatabase
+  on error goto 0
 
   ' Obtain the current database username and password
 
-  user = dbInfo.Username
-  pass = dbinfo.Password
+  if not IsEmpty (dbInfo) then
+    user = dbInfo.Username
+    pass = dbinfo.Password
+  else
+    user = "dba"
+    pass = "sql"
+  end if
 
   '---------------------------------------------------------------------------
   ' Before we do anything, take an emergency undo backup of the current state.
 
   backupScript = Replace (WScript.ScriptFullName, "delclients", "backupdb")
 
-  if FS.FileExists (backupScript) then
+  if nobackup then
+    ' nothing to do except proceed on
+  elseif FS.FileExists (backupScript) then
     result = Shell.Run (q & backupScript & q & " /undo:ClientDelete", 2, true) 
 
     if result <> 0 then
@@ -199,7 +214,7 @@
   ' database ID codes, from which we derive all the other stages in the
   ' pipeline.
 
-  set machines = filterIds (find)
+  set machines = filterMachines (find)
   if machines.Count = 0 then
     WScript.Echo "No matches found"
     WScript.Quit 1
@@ -212,25 +227,54 @@
   set shortcuts = findShortcuts (machines)
   set configs = findConfigs (machines)
 
-  shortcutSet = keysToSet (shortcuts)
-  machineSet = keysToSet (machines)
-  configSet = keysToSet (configs)
+  dim machineCount
+  machineCount = machines.count
 
-  x = clean_WMIReport (shortcutSet) + _
-      clean_Inventory (machineSet) + _
-      clean_Backups (machineSet) + _
-      clean_CustomConfigs (shortcutSet) + _
-      clean_Configs (configSet) + _
-      clean_Tasks (shortcutSet) + _
-      clean_Machines (machineSet)
+  dim x
+  x = 0
 
-  WScript.Echo machines.Count & " client(s) with " & x & " database records cleaned"
+  dim limit
+  limit = 128
+
+  dim what
+  do while shortcuts.count > 0
+    what = keysToSet (shortcuts, limit)
+
+    x = x + clean_WMIReport (what) + _
+      	    clean_CustomConfigs (what) + _
+            clean_Tasks (what)
+  loop
+
+  do while configs.count > 0
+    what = keysToSet (configs, limit)
+
+    x = x + clean_Configs (what)
+  loop
+
+  ' The WMI data is a special case since it can have 10,000+ records
+  ' per machine; handle it one machine at a time to avoid internal
+  ' limits in ADO that blow out
+
+  dim item
+  for each item in machines.keys
+    x = x + clean_Inventory (item)
+  next
+
+  do while machines.count > 0
+    what = keysToSet (machines, limit)
+
+    x = x + clean_Backups (what) + _
+            clean_Machines (what)
+  loop
+
+  adoConn.commitTrans
+  server.RefreshDatabase
+
+  WScript.Echo machineCount & " client(s) with " & x & " database records cleaned"
 
   ' Notify the configuration Server of the changes that we've made, which
   ' it handles by re-reading everything.
 
-  adoConn.CommitTrans
-  server.RefreshDatabase
   WScript.Quit 0
 
 ' Since WScript 5.1 doesn't support the Named argument collection, split the regular
@@ -283,50 +327,28 @@ end function
 ' Extract a string from the dictionary which combines the strings into a
 ' set literal suitable for using with the IN operator.
 
-function keysToSet(dict)
-  str = ""
+function keysToSet (dict, byval limit)
+  dim str
+  str = "("
 
+  dim id
   for each id in dict.keys
-    if str = "" then
-      str = "("
-    else
+    if str <> "(" then
       str = str & ","
     end if
 
     str = str & id
+    dict.remove (id)
+
+    if limit = 1 then
+      exit for
+    end if
+    limit = limit - 1
   next
 
-  if str = "" then
-    str = "()"
-  else
-    str = str & ")"
-  end if
+  str = str & ")"
 
   keysToSet = str
-end function
-
-' Extract a string from the dictionary which combines the value strings
-' into a set literal suitable for using with the IN operator.
-
-function valuesToSet(dict)
-  str = ""
-
-  for each id in dict.keys
-    if str = "" then
-      str = "("
-    else
-      str = str & ","
-    end if
-    str = str & dict (id)
-  next
-
-  if str = "" then
-    str = "()"
-  else
-    str = str & ")"
-  end if
-
-  valuesToSet = str
 end function
 
 ' Create a query object
@@ -348,21 +370,25 @@ function execSql (sql)
 end function
 
 ' Build a list of Machine.ID values by looking through all the MachineView
-' shortcut names and matching them.
+' shortcut names and matching them. This only looks for machines, not
+' folders, since folders have no MachineID column.
 
-function filterIds (pattern)
+function filterMachines (pattern)
   ' Create the RegExp object to do the matching
 
+  dim re
   set re = new RegExp
   re.Pattern = find
   re.IgnoreCase = true
 
   ' Create a dictionary to remember the view and machine table IDs.
 
+  dim dict
   set dict = CreateObject ("Scripting.Dictionary")
 
   ' Look in all the returned rows for the pattern the user asked for
 
+  dim record
   set record = query ("select Description, MachineId " & _
                       "from Machine, MachineView " & _
                       "where Machine.ID = MachineView.MachineID")
@@ -374,6 +400,7 @@ function filterIds (pattern)
       ' We got a hit; record the ID in a dictionary object
       ' for future reference
 
+      dim x
       x = CStr (id)
 
       if not dict.Exists(x) then
@@ -386,27 +413,33 @@ function filterIds (pattern)
 
   record.Close
   
-  set filterIds = dict
+  set filterMachines = dict
 end function
 
+
 ' Take a dictionary of machine IDs and generate a dictionary of machine
-' shortcut IDs
+' shortcut (aka view) IDs
 
 function findShortcuts (machines)
+  dim dict
   set dict = CreateObject ("Scripting.Dictionary")
 
-  x = keysToSet (machines)
-  set record = query ("select ID, MachineId from MachineView " & _
-                      "where MachineId IN " & x)
-  do while not record.EOF
-    id = record ("ID")
-    machineId = record ("MachineId")
+  dim machineId
+  for each machineId in machines.keys
+    dim record
+    set record = query ("select ID from MachineView " & _
+                        "where MachineId = " & machineId)
 
-    dict.Add id, machineId
-    record.MoveNext
-  loop
+    do while not record.EOF
+      dim id
+      id = record ("ID")
 
-  record.Close
+      dict.Add id, machineId
+      record.MoveNext
+    loop
+
+    record.Close
+  next 
 
   set findShortcuts = dict
 end function
@@ -415,20 +448,25 @@ end function
 ' config IDs
 
 function findConfigs (machines)
+  dim dict
   set dict = CreateObject ("Scripting.Dictionary")
 
-  x = keysToSet (machines)
-  set record = query ("select ID, MachineId from ResourceView " & _
-                      "where MachineId IN " & x)
-  do while not record.EOF
-    id = record ("ID")
-    machineId = record ("MachineId")
+  dim machineId
+  for each machineId in machines.keys
+    dim record
+    set record = query ("select ID from ResourceView " & _
+                        "where MachineId = " & machineId)
 
-    dict.Add id, machineId
-    record.MoveNext
-  loop
+    do while not record.EOF
+      dim id
+      id = record ("ID")
 
-  record.Close
+      dict.Add id, machineId
+      record.MoveNext
+    loop
+
+    record.Close
+  next
 
   set findConfigs = dict
 end function
@@ -437,6 +475,7 @@ end function
 ' The various cleanup functions to purge the client data.
 
 function clean_WMIReport (shortcuts)
+  dim x
   x = execSql ("delete from WMIReport " & _
                "where MachineViewID IN " & shortcuts)
 
@@ -444,6 +483,7 @@ function clean_WMIReport (shortcuts)
 end function
 
 function clean_Backups (machines)
+  dim x
   x = 0
   set record = query ("select Filename " & _
                       "from BackupRegimeInstanceMachine " & _
@@ -463,17 +503,20 @@ function clean_Backups (machines)
   clean_Backups = x
 end function
 
-function clean_Inventory (machines)
+function clean_Inventory (id)
+  dim x
   x = execSql ("delete from WMIData " & _
-               "where MachineId IN " & machines)
+               "where MachineId = " & id)
 
+  dim y
   y = execSql ("delete from MachineWMIViewMap " & _
-               "where MachineId IN " & machines)
+               "where MachineId = " & id)
 
   clean_Inventory = x + y
 end function
 
 function clean_CustomConfigs (shortcuts)
+  dim x
   x = execSql ("delete from TaskOp " & _
                "where TaskStepId = 18 " & _
                " and MachineViewId IN " & shortcuts)
@@ -482,20 +525,29 @@ function clean_CustomConfigs (shortcuts)
 end function
 
 function clean_Configs (configs)
+  if configs = "()" then
+    clean_Configs = 0
+    exit function
+  end if
+
+  dim x
   x = execSql ("delete from ConfParam " & _
                "where ConfigurationId IN " & configs)
 
+  dim y
   y = execSql ("delete from Configuration " & _
                "where ID IN " & configs)
-               
+
   clean_Configs = x + y
 end function
 
 function clean_Tasks (shortcuts)
+  dim x
   x = execSql ("update TaskOp " & _
                "set MachineViewId = 1 " & _
                "where MachineViewId IN " & shortcuts)
 
+  dim y
   y = execSql ("update Task " & _
                "set MachineViewId = 1 " & _
                "where MachineViewId IN " & shortcuts)
@@ -504,16 +556,16 @@ function clean_Tasks (shortcuts)
 end function
 
 function clean_Machines (machines)
+  dim x
   x = execSql ("delete from MachineView " & _
                "where MachineId IN " & machines)
 
+  dim y
   y = execSql ("delete from Machine " & _
                "where ID IN " & machines)
 
   clean_Machines = x + y
 end function
 
-
 </script>
 </job>
-
