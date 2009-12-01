@@ -135,6 +135,9 @@
   dim collision
   collision = false
 
+  dim rename
+  rename = false
+
   dim name
   dim id
 
@@ -142,10 +145,18 @@
     id = record ("ID")
     name = record ("Description")
 
-    if name_id.Exists (name) then
-      ' There's a collision, make up a name
+    if name_id.Exists (name) Or InStr (name, " - ") = 0 then
+      ' There's a collision (or potential for collision with a named
+      ' configuration), make up a unique name not likely to collide
+      ' with anything
+
       name = name & " - " & id
-      collision = true
+
+      if name_id.Exists (name) then
+        collision = true
+      else
+        rename = true
+      end if
 
       ' the id_name map is what we process when changing things,
       ' so only add things to it if they need to be altered.
@@ -157,7 +168,7 @@
     record.MoveNext
   loop
 
-  if not collision then
+  if not collision and not rename then
     WScript.Echo "No configuration name collisions"
     WScript.Quit 0
   end if
