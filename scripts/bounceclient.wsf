@@ -82,6 +82,15 @@ sub restartService (name)
   dim service
   for each service in services
     service.StopService ()
+
+    ' A short delay here helps avoid a small problem when the stopped service
+    ' still has the client's default communication port open for a tiny window
+    ' (this kind of thing happens to files too, they can be open exclusively
+    ' even after a process has exited because the internal OS cleanup actions
+    ' happen after that.
+
+    WScript.Sleep 5 * 1000
+
     service.StartService ()
   next
 end sub
