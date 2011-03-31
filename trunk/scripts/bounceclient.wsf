@@ -67,7 +67,7 @@
 
   WScript.Sleep delay * 1000
 
-  restartService ngclient
+  restartService "ngclient"
   WScript.Quit 0
 
 ' Stop and then restart a service by name
