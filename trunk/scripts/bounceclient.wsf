@@ -1,0 +1,90 @@
+' Copyright (c) 2011, Nigel Bree
+' All rights reserved.
+' 
+' Redistribution and use in source and binary forms, with or without
+' modification, are permitted provided that the following conditions are met:
+'
+' * Redistributions of source code must retain the above copyright notice,
+'   this list of conditions and the following disclaimer.
+' * Redistributions in binary form must reproduce the above copyright notice,
+'   this list of conditions and the following disclaimer in the documentation
+'   and/or other materials provided with the distribution.
+' * Neither the name of the Symantec Corporation nor the names of its
+'   contributors may be used to endorse or promote products derived from this
+'   software without specific prior written permission.
+'
+' THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+' IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+' ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+' LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+' CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+' SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+' INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+' CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+' ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+' POSSIBILITY OF SUCH DAMAGE.
+'
+'----------------------------------------------------------------------------
+'
+' If started with no parameters, spawn a background copy of the script to do
+' the actual work and exit successfully, so that if this is run directly by
+' a client during the "Software and File Actions" phase of a GSS 2.5 task it
+' exits with a success status immediately which is reported to the server so
+' the task can complete.
+'
+' In the background copy, wait some short time (to give the GSS client time to
+' notify the server that the script completed, finishing the task) and then
+' bounce the GSS client by stopping and restarting the service.
+'
+' Requires WScript 5.7, which every machine running GSS should already have.
+
+<job id="GSS Client Restart">
+<script language="VBScript">
+
+  q = Chr (34)
+  set Shell = WScript.CreateObject ("WScript.Shell")
+
+  if WScript.Arguments.Named ("restart") = "" then
+    host = WScript.FullName
+    args = q & WScript.ScriptFullName & q
+    for each arg in WScript.Arguments
+      args = args & " " & q & arg & q
+    next
+
+    ' Run the background copy of the script, launch and don't wait for it
+    Shell.Run host & " " & args & " /restart:true", 0, false
+    WScript.Quit 0
+  end if
+
+  ' By default wait 40 seconds to give the containing task time to complete
+  ' or the indicated number of seconds if a number is supplied to the script
+
+  delay = CInt (WScript.Arguments.Named ("timeout"))
+  if delay = 0 then
+    delay = 40
+  end if
+
+  WScript.Sleep delay * 1000
+
+  restartService ngclient
+  WScript.Quit 0
+
+' Stop and then restart a service by name
+
+sub restartService (name)
+  dim wmi
+  set wmi = GetObject ("winmgmts:{impersonationLevel=impersonate}!\\.\root\cimv2")
+
+  dim services
+  set services = wmi.execQuery ("select * from Win32_Service where Name='" & name & "'")
+
+  dim service
+  for each service in services
+    service.StopService ()
+    service.StartService ()
+  next
+end sub
+
+</script>
+</job>
