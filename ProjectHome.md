@@ -1,0 +1,1 @@
+There are a number of useful administrative tasks that can be accomplished around the Symantec [Ghost Solution Suite](http://www.ghost.com/) using scripting, and I have obtained permission to publish the scripts I have written as open source with a BSD license.
